@@ -59,7 +59,16 @@ static unsigned thread_ticks;   /**< # of timer ticks since last yield. */
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
 
-static void kernel_thread (thread_func *, void *aux);
+static void kernel_thread (thread_func *, void *);
+// Agregar función helper thread_get_by_tid
+struct thread *
+thread_get_by_tid (tid_t tid)
+{
+  struct thread *t = thread_current();
+  if (t->tid == tid)
+    return t;
+  return NULL;
+}
 
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);

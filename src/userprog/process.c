@@ -8,6 +8,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -21,6 +22,9 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
+/* Lista global de threads */
+extern struct list all_list;
+
 /** Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -30,7 +34,7 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   tid_t tid;
-
+  
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
@@ -38,8 +42,16 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  /* Extrae el nombre del programa */
+  char *save_ptr;
+  char *program_name = strtok_r(fn_copy, " ", &save_ptr);
+  if (program_name == NULL) {
+    palloc_free_page(fn_copy);
+    return TID_ERROR;
+  }
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (program_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -54,17 +66,39 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
+  /* Extrae el nombre del programa para cargarlo */
+  char *save_ptr;
+  char *program_name = strtok_r(file_name, " ", &save_ptr);
+  if (program_name == NULL) {
+    palloc_free_page(file_name);
+    thread_exit();
+  }
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+
+  /* Inicializar matriz de archivos */
+  struct thread *t = thread_current();
+  t->files = palloc_get_page(PAL_ZERO);
+  if (t->files == NULL) {
+    palloc_free_page(file_name);
+    thread_exit();
+  }
+
+  /* Inicializa descriptores de archivosestandar */
+  struct file **files = t->files;
+  files[0] = NULL;  /* stdin */
+  files[1] = NULL;  /* stdout */
+
+  success = load (program_name, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
-    thread_exit ();
+  if (!success)
+    thread_exit();
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -81,13 +115,20 @@ start_process (void *file_name_)
    exception), returns -1.  If TID is invalid or if it was not a
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
-   immediately, without waiting.
-
-   This function will be implemented in problem 2-2.  For now, it
-   does nothing. */
+   immediately, without waiting. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
+  /* Implementacion: Cede unas cuantas veces para que corra el hijo */
+  int i;
+  for (i = 0; i < 100; i++) 
+    {
+      struct thread *child = thread_get_by_tid(child_tid);
+      if (child == NULL)
+        break;
+      thread_yield();
+    }
+  
   return -1;
 }
 
@@ -97,6 +138,20 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* Cierra todos los archivos abiertos */
+  if (cur->files != NULL) {
+    struct file **files = cur->files;
+    int i;
+    for (i = 0; i < MAX_FILES; i++) {
+      if (files[i] != NULL) {
+        file_close(files[i]);
+        files[i] = NULL;
+      }
+    }
+    palloc_free_page(files);
+    cur->files = NULL;
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -195,7 +250,7 @@ struct Elf32_Phdr
 #define PF_W 2          /**< Writable. */
 #define PF_R 4          /**< Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, char *file_name);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -221,11 +276,25 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
+  /* Crea copia de FILE_NAME para el analisis de argumentos */
+  char *fn_copy = palloc_get_page(0);
+  if (fn_copy == NULL)
+    goto done;
+  strlcpy(fn_copy, file_name, PGSIZE);
+
+  /* Extrae el nombre del programa */
+  char *save_ptr;
+  char *program_name = strtok_r(fn_copy, " ", &save_ptr);
+  if (program_name == NULL) {
+    palloc_free_page(fn_copy);
+    goto done;
+  }
+
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (program_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", program_name);
       goto done; 
     }
 
@@ -282,7 +351,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
                      Read initial part from disk and zero the rest. */
                   read_bytes = page_offset + phdr.p_filesz;
                   zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
-                                - read_bytes);
+                              - read_bytes);
                 }
               else 
                 {
@@ -292,7 +361,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
                   zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
                 }
               if (!load_segment (file, file_page, (void *) mem_page,
-                                 read_bytes, zero_bytes, writable))
+                               read_bytes, zero_bytes, writable))
                 goto done;
             }
           else
@@ -302,7 +371,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, fn_copy))
     goto done;
 
   /* Start address. */
@@ -312,6 +381,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
+  if (fn_copy != NULL)
+    palloc_free_page(fn_copy);
   file_close (file);
   return success;
 }
@@ -427,7 +498,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /** Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, char *file_name) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -437,7 +508,56 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE;
+        {
+          *esp = PHYS_BASE;
+          char *token, *save_ptr;
+          int argc = 0;
+          char *argv[32];  /* Máximo 32 argumentos */
+          
+          /* Primera pasada: contar argumentos y guardar tokens */
+          for (token = strtok_r (file_name, " ", &save_ptr); token != NULL;
+               token = strtok_r (NULL, " ", &save_ptr))
+            {
+              argv[argc] = token;
+              argc++;
+              if (argc >= 32)
+                return false;
+            }
+          
+          /* Poner argumentos en la pila */
+          for (int i = argc - 1; i >= 0; i--)
+            {
+              *esp -= strlen(argv[i]) + 1;
+              memcpy(*esp, argv[i], strlen(argv[i]) + 1);
+              argv[i] = *esp;  /* Actualizar puntero */
+            }
+          
+          /* Alinear a word */
+          *esp = (void *) ((unsigned int) (*esp) & ~3u);
+          
+          /* Poner NULL sentinel */
+          *esp -= 4;
+          *((uint32_t *) *esp) = 0;
+          
+          /* Poner punteros a argumentos */
+          for (int i = argc - 1; i >= 0; i--)
+            {
+              *esp -= 4;
+              *((void **) *esp) = argv[i];
+            }
+          
+          /* Poner puntero a argv */
+          *esp -= 4;
+          *((void **) *esp) = *esp + 4;
+          
+          /* Poner argc */
+          *esp -= 4;
+          *((int *) *esp) = argc;
+          
+          /* Poner dirección de retorno falsa */
+          *esp -= 4;
+          *((void **) *esp) = 0;
+        }
       else
         palloc_free_page (kpage);
     }
