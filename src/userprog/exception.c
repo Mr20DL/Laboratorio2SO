@@ -4,14 +4,15 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "userprog/syscall.h"
 
-/** Number of page faults processed. */
+/* Number of page faults processed. */
 static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
 
-/** Registers handlers for interrupts that can be caused by user
+/* Registers handlers for interrupts that can be caused by user
    programs.
 
    In a real Unix-like OS, most of these interrupts would be
@@ -60,14 +61,14 @@ exception_init (void)
   intr_register_int (14, 0, INTR_OFF, page_fault, "#PF Page-Fault Exception");
 }
 
-/** Prints exception statistics. */
+/* Prints exception statistics. */
 void
 exception_print_stats (void) 
 {
   printf ("Exception: %lld page faults\n", page_fault_cnt);
 }
 
-/** Handler for an exception (probably) caused by a user process. */
+/* Handler for an exception (probably) caused by a user process. */
 static void
 kill (struct intr_frame *f) 
 {
@@ -89,7 +90,7 @@ kill (struct intr_frame *f)
       printf ("%s: dying due to interrupt %#04x (%s).\n",
               thread_name (), f->vec_no, intr_name (f->vec_no));
       intr_dump_frame (f);
-      thread_exit (); 
+      exit (-1); 
 
     case SEL_KCSEG:
       /* Kernel's code segment, which indicates a kernel bug.
@@ -104,11 +105,11 @@ kill (struct intr_frame *f)
          kernel. */
       printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
              f->vec_no, intr_name (f->vec_no), f->cs);
-      thread_exit ();
+      exit (-1);
     }
 }
 
-/** Page fault handler.  This is a skeleton that must be filled in
+/* Page fault handler.  This is a skeleton that must be filled in
    to implement virtual memory.  Some solutions to project 2 may
    also require modifying this code.
 
@@ -122,10 +123,10 @@ kill (struct intr_frame *f)
 static void
 page_fault (struct intr_frame *f) 
 {
-  bool not_present;  /**< True: not-present page, false: writing r/o page. */
-  bool write;        /**< True: access was write, false: access was read. */
-  bool user;         /**< True: access by user, false: access by kernel. */
-  void *fault_addr;  /**< Fault address. */
+  bool not_present;  /* True: not-present page, false: writing r/o page. */
+  bool write;        /* True: access was write, false: access was read. */
+  bool user;         /* True: access by user, false: access by kernel. */
+  void *fault_addr;  /* Fault address. */
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
