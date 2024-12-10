@@ -38,24 +38,24 @@
 #include "filesys/fsutil.h"
 #endif
 #include "vm/frame.h"
+#include "vm/page.h"
 
-/* Page directory with kernel mappings only. */
+
 uint32_t *init_page_dir;
 
 #ifdef FILESYS
-/* -f: Format the file system? */
+
 static bool format_filesys;
 
-/* -filesys, -scratch, -swap: Names of block devices to use,
-   overriding the defaults. */
+
 static const char *filesys_bdev_name;
 static const char *scratch_bdev_name;
 #ifdef VM
 static const char *swap_bdev_name;
 #endif
-#endif /* FILESYS */
+#endif
 
-/* -ul: Maximum number of pages to put into palloc's user pool. */
+
 static size_t user_page_limit = SIZE_MAX;
 
 static void bss_init (void);
@@ -73,40 +73,38 @@ static void locate_block_device (enum block_type, const char *name);
 
 int main (void) NO_RETURN;
 
-/* Pintos main program. */
+
 int
 main (void)
 {
   char **argv;
 
-  /* Clear BSS. */  
+
   bss_init ();
 
-  /* Break command line into arguments and parse options. */
+
   argv = read_command_line ();
   argv = parse_options (argv);
 
-  /* Initialize ourselves as a thread so we can use locks,
-     then enable console locking. */
+
   thread_init ();
   console_init ();  
 
-  /* Greet user. */
   printf ("Pintos booting with %'"PRIu32" kB RAM...\n",
           init_ram_pages * PGSIZE / 1024);
 
-  /* Initialize memory system. */
+
   palloc_init (user_page_limit);
   malloc_init ();
   paging_init ();
 
-  /* Segmentation. */
+
 #ifdef USERPROG
   tss_init ();
   gdt_init ();
 #endif
 
-  /* Initialize interrupt handlers. */
+
   intr_init ();
   timer_init ();
   kbd_init ();
@@ -116,36 +114,31 @@ main (void)
   syscall_init ();
 #endif
 
-  /* Start thread scheduler and enable interrupts. */
+
   thread_start ();
   serial_init_queue ();
   timer_calibrate ();
 
 #ifdef FILESYS
-  /* Initialize file system. */
+
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
 #endif
 
+  init_swap_valid_table ();
   frame_init ();
 
   printf ("Boot complete.\n");
   
-  /* Run actions specified on kernel command line. */
+
   run_actions (argv);
 
-  /* Finish up. */
+
   shutdown ();
   thread_exit ();
 }
-
-/* Clear the "BSS", a segment that should be initialized to
-   zeros.  It isn't actually stored on disk or zeroed by the
-   kernel loader, so we have to zero it ourselves.
 
-   The start and end of the BSS segment is recorded by the
-   linker as _start_bss and _end_bss.  See kernel.lds. */
 static void
 bss_init (void) 
 {
@@ -153,10 +146,7 @@ bss_init (void)
   memset (&_start_bss, 0, &_end_bss - &_start_bss);
 }
 
-/* Populates the base page directory and page table with the
-   kernel virtual mapping, and then sets up the CPU to use the
-   new page directory.  Points init_page_dir to the page
-   directory it creates. */
+
 static void
 paging_init (void)
 {
@@ -183,16 +173,11 @@ paging_init (void)
       pt[pte_idx] = pte_create_kernel (vaddr, !in_kernel_text);
     }
 
-  /* Store the physical address of the page directory into CR3
-     aka PDBR (page directory base register).  This activates our
-     new page tables immediately.  See [IA32-v2a] "MOV--Move
-     to/from Control Registers" and [IA32-v3a] 3.7.5 "Base Address
-     of the Page Directory". */
+
   asm volatile ("movl %0, %%cr3" : : "r" (vtop (init_page_dir)));
 }
 
-/* Breaks the kernel command line into words and returns them as
-   an argv-like array. */
+
 static char **
 read_command_line (void) 
 {
@@ -214,7 +199,7 @@ read_command_line (void)
     }
   argv[argc] = NULL;
 
-  /* Print kernel command line. */
+
   printf ("Kernel command line:");
   for (i = 0; i < argc; i++)
     if (strchr (argv[i], ' ') == NULL)
@@ -226,8 +211,7 @@ read_command_line (void)
   return argv;
 }
 
-/* Parses options in ARGV[]
-   and returns the first non-option argument. */
+
 static char **
 parse_options (char **argv) 
 {
@@ -267,20 +251,13 @@ parse_options (char **argv)
         PANIC ("unknown option `%s' (use -h for help)", name);
     }
 
-  /* Initialize the random number generator based on the system
-     time.  This has no effect if an "-rs" option was specified.
 
-     When running under Bochs, this is not enough by itself to
-     get a good seed value, because the pintos script sets the
-     initial time to a predictable value, not to the local time,
-     for reproducibility.  To fix this, give the "-r" option to
-     the pintos script to request real-time execution. */
   random_init (rtc_get_time ());
   
   return argv;
 }
 
-/* Runs the task specified in ARGV[1]. */
+
 static void
 run_task (char **argv)
 {
@@ -295,20 +272,19 @@ run_task (char **argv)
   printf ("Execution of '%s' complete.\n", task);
 }
 
-/* Executes all of the actions specified in ARGV[]
-   up to the null pointer sentinel. */
+
 static void
 run_actions (char **argv) 
 {
-  /* An action. */
+
   struct action 
     {
-      char *name;                       /* Action name. */
-      int argc;                         /* # of args, including action name. */
-      void (*function) (char **argv);   /* Function to execute action. */
+      char *name;                   
+      int argc;                         
+      void (*function) (char **argv);  
     };
 
-  /* Table of supported actions. */
+
   static const struct action actions[] = 
     {
       {"run", 2, run_task},
@@ -327,27 +303,26 @@ run_actions (char **argv)
       const struct action *a;
       int i;
 
-      /* Find action name. */
+
       for (a = actions; ; a++)
         if (a->name == NULL)
           PANIC ("unknown action `%s' (use -h for help)", *argv);
         else if (!strcmp (*argv, a->name))
           break;
 
-      /* Check for required arguments. */
+     
       for (i = 1; i < a->argc; i++)
         if (argv[i] == NULL)
           PANIC ("action `%s' requires %d argument(s)", *argv, a->argc - 1);
 
-      /* Invoke action and advance. */
+     
       a->function (argv);
       argv += a->argc;
     }
   
 }
 
-/* Prints a kernel command line help message and powers off the
-   machine. */
+
 static void
 usage (void)
 {
@@ -390,7 +365,7 @@ usage (void)
 }
 
 #ifdef FILESYS
-/* Figure out what block devices to cast in the various Pintos roles. */
+
 static void
 locate_block_devices (void)
 {
@@ -401,10 +376,7 @@ locate_block_devices (void)
 #endif
 }
 
-/* Figures out what block device to use for the given ROLE: the
-   block device with the given NAME, if NAME is non-null,
-   otherwise the first block device in probe order of type
-   ROLE. */
+
 static void
 locate_block_device (enum block_type role, const char *name)
 {
