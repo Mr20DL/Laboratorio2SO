@@ -163,6 +163,8 @@ thread_create (const char *name, int priority,
   sema_init (&(t->pcb->sema_load), 0);
 
   list_push_back (&(t->parent_process->list_child_process), &(t->elem_child_process));
+  
+  init_spt (&t->spt);
 
   thread_unblock (t);
 

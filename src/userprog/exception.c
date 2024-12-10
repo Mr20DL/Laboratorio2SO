@@ -4,6 +4,7 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "vm/page.h"
 
 static long long page_fault_cnt;
 
@@ -70,17 +71,27 @@ page_fault (struct intr_frame *f)
   bool user;         
   void *fault_addr;  
 
+  void *upage;
+
   asm ("movl %%cr2, %0" : "=r" (fault_addr));
 
   intr_enable ();
 
   page_fault_cnt++;
 
-  sys_exit (-1);
-
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
+  
+  upage = pg_round_down (fault_addr);
+
+  if (is_kernel_vaddr (fault_addr) || !not_present) 
+    sys_exit (-1);
+
+  if (load_page (&thread_current()->spt, upage))
+    return;
+    
+  sys_exit (-1);
 
   printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,

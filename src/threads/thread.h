@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "synch.h"
+#include <hash.h>
 
 enum thread_status
   {
@@ -54,6 +55,8 @@ struct thread
     struct list list_child_process;
     struct list_elem elem_child_process;
 #endif
+
+    struct hash spt;
 
     unsigned magic;                  
   };

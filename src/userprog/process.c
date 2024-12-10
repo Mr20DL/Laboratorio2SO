@@ -17,6 +17,7 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "vm/page.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -112,6 +113,10 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
   int i;
+
+  destroy_spt (&cur->spt);
+
+  file_close (cur->pcb->file_ex);
 
   for (i = cur->pcb->fd_count - 1; i > 1; i--)
   {
@@ -356,7 +361,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
   t->pcb->is_loaded = true;
 
  done:
-  file_close (file);
   return success;
 }
 
@@ -406,26 +410,12 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
-        return false;
-
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
-
-      if (!install_page (upage, kpage, writable)) 
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-
+      init_file_spte (&thread_current ()->spt, upage, file, ofs, page_read_bytes, page_zero_bytes, writable);
+      
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
+      ofs += page_read_bytes;
     }
   return true;
 }
@@ -436,14 +426,14 @@ setup_stack (void **esp)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  kpage = falloc_get_page (PAL_USER | PAL_ZERO, PHYS_BASE - PGSIZE);
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
         *esp = PHYS_BASE - 12;
       else
-        palloc_free_page (kpage);
+        falloc_free_page (kpage);
     }
   return success;
 }
