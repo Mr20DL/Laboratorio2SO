@@ -72,6 +72,8 @@ page_fault (struct intr_frame *f)
   void *fault_addr;  
 
   void *upage;
+  void *esp;
+  struct hash *spt;
 
   asm ("movl %%cr2, %0" : "=r" (fault_addr));
 
@@ -88,7 +90,12 @@ page_fault (struct intr_frame *f)
   if (is_kernel_vaddr (fault_addr) || !not_present) 
     sys_exit (-1);
 
-  if (load_page (&thread_current()->spt, upage))
+  spt = &thread_current()->spt;
+  esp = user ? f->esp : thread_current()->esp;
+  if (esp - 32 <= fault_addr && PHYS_BASE - MAX_STACK_SIZE <= fault_addr)
+    if (!get_spte(spt, upage))
+      init_zero_spte (spt, upage);
+  if (load_page (spt, upage))
     return;
     
   sys_exit (-1);

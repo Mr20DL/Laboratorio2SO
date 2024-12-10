@@ -57,6 +57,7 @@ struct thread
 #endif
 
     struct hash spt;
+    void *esp;
 
     unsigned magic;                  
   };
