@@ -22,11 +22,13 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
+
 tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy, *parsed_fn;
   tid_t tid;
+
 
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
@@ -39,6 +41,7 @@ process_execute (const char *file_name)
   }
 
   strlcpy (parsed_fn, file_name, PGSIZE);
+
 
   pars_filename (parsed_fn);
 
@@ -54,6 +57,7 @@ process_execute (const char *file_name)
   return tid;
 }
 
+
 static void
 start_process (void *file_name_)
 {
@@ -61,10 +65,12 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
+
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
 
   char **argv = palloc_get_page(0);
   int argc = pars_arguments(file_name, argv);
@@ -73,6 +79,7 @@ start_process (void *file_name_)
     init_stack_arg (argv, argc, &if_.esp);
   palloc_free_page (argv);
 
+
   palloc_free_page (file_name);
 
   sema_up (&(thread_current ()->pcb->sema_load));
@@ -80,9 +87,11 @@ start_process (void *file_name_)
   if (!success) 
     sys_exit (-1);
 
+
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
+
 
 int
 process_wait (tid_t child_tid) 
@@ -107,6 +116,7 @@ process_wait (tid_t child_tid)
   return exit_code;
 }
 
+
 void
 process_exit (void)
 {
@@ -114,6 +124,9 @@ process_exit (void)
   uint32_t *pd;
   int i;
 
+  for (i = 0; i < cur->mapid; i++)
+    sys_munmap (i);
+  
   destroy_spt (&cur->spt);
 
   file_close (cur->pcb->file_ex);
@@ -125,9 +138,11 @@ process_exit (void)
 
   palloc_free_page (cur->pcb->fd_table);
 
+
   pd = cur->pagedir;
   if (pd != NULL) 
     {
+
       cur->pagedir = NULL;
       pagedir_activate (NULL);
       pagedir_destroy (pd);
@@ -137,12 +152,15 @@ process_exit (void)
   sema_up (&(cur->pcb->sema_wait));
 }
 
+
 void
 process_activate (void)
 {
   struct thread *t = thread_current ();
 
+
   pagedir_activate (t->pagedir);
+
 
   tss_update ();
 }
@@ -173,6 +191,7 @@ pars_filename (char *cmd)
 void
 init_stack_arg (char **argv, int argc, void **esp)
 {
+
   int argv_len, i, len;
   for (i = argc - 1, argv_len = 0; i >= 0; i--)
   {
@@ -183,11 +202,14 @@ init_stack_arg (char **argv, int argc, void **esp)
     argv[i] = *esp;
   }
 
+
   if (argv_len % 4)
     *esp -= 4 - (argv_len % 4);
 
+
   *esp -= 4;
   **(uint32_t **)esp = 0;
+
 
   for(i = argc - 1; i >= 0; i--)
   {
@@ -195,24 +217,28 @@ init_stack_arg (char **argv, int argc, void **esp)
     **(uint32_t **)esp = argv[i];
   }
 
+ 
   *esp -= 4;
   **(uint32_t **)esp = *esp + 4;
+
 
   *esp -= 4;
   **(uint32_t **)esp = argc;
 
+
   *esp -= 4;
   **(uint32_t **)esp = 0;
 }
-
 
 typedef uint32_t Elf32_Word, Elf32_Addr, Elf32_Off;
 typedef uint16_t Elf32_Half;
+
 
 #define PE32Wx PRIx32   
 #define PE32Ax PRIx32   
 #define PE32Ox PRIx32   
 #define PE32Hx PRIx16   
+
 
 struct Elf32_Ehdr
   {
@@ -232,6 +258,7 @@ struct Elf32_Ehdr
     Elf32_Half    e_shstrndx;
   };
 
+
 struct Elf32_Phdr
   {
     Elf32_Word p_type;
@@ -244,24 +271,27 @@ struct Elf32_Phdr
     Elf32_Word p_align;
   };
 
+
 #define PT_NULL    0           
-#define PT_LOAD    1           
+#define PT_LOAD    1            
 #define PT_DYNAMIC 2           
 #define PT_INTERP  3           
-#define PT_NOTE    4            
+#define PT_NOTE    4           
 #define PT_SHLIB   5           
-#define PT_PHDR    6            
+#define PT_PHDR    6        
 #define PT_STACK   0x6474e551   
+
 
 #define PF_X 1         
 #define PF_W 2         
-#define PF_R 4         
+#define PF_R 4        
 
 static bool setup_stack (void **esp);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
                           bool writable);
+
 
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
@@ -273,10 +303,12 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
+
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
+
 
   file = filesys_open (file_name);
   if (file == NULL) 
@@ -286,6 +318,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   t->pcb->file_ex = file;
+
 
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -298,6 +331,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       printf ("load: %s: error loading executable\n", file_name);
       goto done; 
     }
+
 
   file_ofs = ehdr.e_phoff;
   for (i = 0; i < ehdr.e_phnum; i++) 
@@ -318,6 +352,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
         case PT_PHDR:
         case PT_STACK:
         default:
+         
           break;
         case PT_DYNAMIC:
         case PT_INTERP:
@@ -333,12 +368,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
               uint32_t read_bytes, zero_bytes;
               if (phdr.p_filesz > 0)
                 {
+         
                   read_bytes = page_offset + phdr.p_filesz;
                   zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
                                 - read_bytes);
                 }
               else 
                 {
+      
                   read_bytes = 0;
                   zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
                 }
@@ -352,8 +389,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
         }
     }
 
+
   if (!setup_stack (esp))
     goto done;
+
 
   *eip = (void (*) (void)) ehdr.e_entry;
 
@@ -361,40 +400,51 @@ load (const char *file_name, void (**eip) (void), void **esp)
   t->pcb->is_loaded = true;
 
  done:
+
   return success;
 }
-
+
 
 static bool install_page (void *upage, void *kpage, bool writable);
+
 
 static bool
 validate_segment (const struct Elf32_Phdr *phdr, struct file *file) 
 {
+
   if ((phdr->p_offset & PGMASK) != (phdr->p_vaddr & PGMASK)) 
     return false; 
+
 
   if (phdr->p_offset > (Elf32_Off) file_length (file)) 
     return false;
 
+
   if (phdr->p_memsz < phdr->p_filesz) 
     return false; 
+
 
   if (phdr->p_memsz == 0)
     return false;
   
+
   if (!is_user_vaddr ((void *) phdr->p_vaddr))
     return false;
   if (!is_user_vaddr ((void *) (phdr->p_vaddr + phdr->p_memsz)))
     return false;
 
+
   if (phdr->p_vaddr + phdr->p_memsz < phdr->p_vaddr)
     return false;
+
 
   if (phdr->p_vaddr < PGSIZE)
     return false;
 
+
   return true;
 }
+
 
 static bool
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
@@ -407,11 +457,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   file_seek (file, ofs);
   while (read_bytes > 0 || zero_bytes > 0) 
     {
+
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       init_file_spte (&thread_current ()->spt, upage, file, ofs, page_read_bytes, page_zero_bytes, writable);
-      
+
+ 
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
@@ -419,6 +471,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
     }
   return true;
 }
+
 
 static bool
 setup_stack (void **esp) 
@@ -430,8 +483,11 @@ setup_stack (void **esp)
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE - 12;
+      if (success) 
+      {
+        init_frame_spte (&thread_current ()->spt, PHYS_BASE - PGSIZE, kpage);
+        *esp = PHYS_BASE;
+      }
       else
         falloc_free_page (kpage);
     }
@@ -443,6 +499,7 @@ static bool
 install_page (void *upage, void *kpage, bool writable)
 {
   struct thread *t = thread_current ();
+
 
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));

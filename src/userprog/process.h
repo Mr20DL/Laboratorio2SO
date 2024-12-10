@@ -12,4 +12,4 @@ int pars_arguments (char *cmd, char **argv);
 void pars_filename (char * cmd);
 void init_stack_arg (char **argv, int argc, void **esp);
 
-#endif /* userprog/process.h */
+#endif

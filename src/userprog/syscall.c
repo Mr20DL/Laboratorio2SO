@@ -6,9 +6,11 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "threads/synch.h"
+#include "vm/page.h"
+#include "threads/vaddr.h"
 
 static void syscall_handler (struct intr_frame *);
-struct semaphore rw_mutex, mutex;
+struct lock file_lock;
 int read_count;
 
 void
@@ -16,8 +18,7 @@ syscall_init (void)
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
   
-  sema_init (&rw_mutex, 1);
-  sema_init (&mutex, 1);
+  lock_init (&file_lock);
   read_count = 0;
 }
 
@@ -47,6 +48,8 @@ syscall_handler (struct intr_frame *f)
   {
     sys_exit (-1);
   }
+  
+  thread_current()->esp = f->esp;
   
   int argv[3];
 
@@ -108,6 +111,14 @@ syscall_handler (struct intr_frame *f)
     case SYS_CLOSE:
       get_argument (f->esp, &argv[0], 1);
       sys_close (argv[0]);
+      break;
+    case SYS_MMAP:
+      get_argument (f->esp, &argv[0], 2);
+      f->eax = sys_mmap ((int) argv[0], (void *) argv[1]);
+      break;
+    case SYS_MUNMAP:
+      get_argument (f->esp, &argv[0], 1);
+      sys_munmap ((int) argv[0]);
       break;
   }
 }
@@ -174,19 +185,27 @@ sys_open (const char *file)
   struct file *file_;
   struct thread *t = thread_current ();
   int fd_count = t->pcb->fd_count;
-  
-  if (file == NULL || !validate_addr (file)) {
+
+  lock_acquire (&file_lock);
+  if (file == NULL || !validate_addr (file)) 
+  {
+    lock_release (&file_lock);
     sys_exit (-1);
   }
 
   file_ = filesys_open (file);
-  if (file_ == NULL) 
+  if (file_ == NULL)  
+  {
+    lock_release (&file_lock);
     return -1;
+  }
 
   if (thread_current ()->pcb->file_ex && (strcmp (thread_current ()->name, file) == 0))
     file_deny_write (file_);
     
   t->pcb->fd_table[t->pcb->fd_count++] = file_;
+  
+  lock_release (&file_lock);
 
   return fd_count;
 }
@@ -218,17 +237,9 @@ sys_read (int fd, void *buffer, unsigned size)
     sys_exit (-1);
   }
 
-  sema_down (&mutex);
-  read_count++;
-  if (read_count == 1) 
-    sema_down (&rw_mutex);
-  sema_up (&mutex);
+  lock_acquire (&file_lock);
   bytes_read = file_read (file, buffer, size);
-  sema_down (&mutex);
-  read_count--;
-  if (read_count == 0)
-    sema_up (&rw_mutex);
-  sema_up (&mutex);
+  lock_release (&file_lock);
 
   return bytes_read;
 }
@@ -242,7 +253,9 @@ sys_write (int fd, const void *buffer, unsigned size)
     sys_exit (-1);
   } else if (fd == 1)
   {
+    lock_acquire (&file_lock);
     putbuf(buffer, size);
+    lock_release (&file_lock);
     return size;
   } else {
     int bytes_written;
@@ -252,9 +265,9 @@ sys_write (int fd, const void *buffer, unsigned size)
       sys_exit (-1);
     }
 
-    sema_down (&rw_mutex);
+    lock_acquire (&file_lock);
     bytes_written = file_write (file, buffer, size);
-    sema_up (&rw_mutex);
+    lock_release (&file_lock);
 
     return bytes_written;
   }
@@ -308,4 +321,80 @@ sys_close (int fd)
   }
 
   t->pcb->fd_count--;
+}
+
+int 
+sys_mmap (int fd, void *addr)
+{
+  struct thread *t = thread_current ();
+  struct file *f = t->pcb->fd_table[fd];
+  struct file *opened_f;
+  struct mmf *mmf;
+
+  if (f == NULL)
+    return -1;
+  
+  if (addr == NULL || (int) addr % PGSIZE != 0)
+    return -1;
+
+  lock_acquire (&file_lock);
+
+  opened_f = file_reopen (f);
+  if (opened_f == NULL)
+  {
+    lock_release (&file_lock);
+    return -1;
+  }
+
+  mmf = init_mmf (t->mapid++, opened_f, addr);
+  if (mmf == NULL)
+  {
+    lock_release (&file_lock);
+    return -1;
+  }
+
+  lock_release (&file_lock);
+
+  return mmf->id;
+}
+
+int 
+sys_munmap (int mapid)
+{
+  struct thread *t = thread_current ();
+  struct list_elem *e;
+  struct mmf *mmf;
+  void *upage;
+
+  if (mapid >= t->mapid)
+    return;
+
+  for (e = list_begin (&t->mmf_list); e != list_end (&t->mmf_list); e = list_next (e))
+  {
+    mmf = list_entry (e, struct mmf, mmf_list_elem);
+    if (mmf->id == mapid)
+      break;
+  }
+  if (e == list_end (&t->mmf_list))
+    return;
+
+  upage = mmf->upage;
+
+  lock_acquire (&file_lock);
+  
+  off_t ofs;
+  for (ofs = 0; ofs < file_length (mmf->file); ofs += PGSIZE)
+  {
+    struct spte *entry = get_spte (&t->spt, upage);
+    if (pagedir_is_dirty (t->pagedir, upage))
+    {
+      void *kpage = pagedir_get_page (t->pagedir, upage);
+      file_write_at (entry->file, kpage, entry->read_bytes, entry->ofs);
+    }
+    page_delete (&t->spt, entry);
+    upage += PGSIZE;
+  }
+  list_remove(e);
+
+  lock_release (&file_lock);
 }
