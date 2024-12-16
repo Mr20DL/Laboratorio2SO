@@ -1,30 +1,39 @@
 #ifndef USERPROG_SYSCALL_H
 #define USERPROG_SYSCALL_H
 
-#define PHYS_BASE 0xc0000000
-#define STACK_BOTTOM 0x8048000
-
 #include <stdbool.h>
+#include "threads/thread.h"
+#include <list.h>
+#include "threads/synch.h"
 
-typedef int pid_t;
+
+struct lock file_lock;       
+
+struct fd_element
+{
+    int fd;                        //ID de descriptores de archivos
+    struct file *myfile;           //El archivo real
+    struct list_elem element;      //lista de elementos para agregar fd_element en fd_list
+};
+
 
 void syscall_init (void);
+void halt (void);
+void exit (int status);
+tid_t exec (const char *cmd_line);
+int wait (tid_t pid);
+bool create (const char *file, unsigned initial_size);
+bool remove (const char *file);
+int open (const char *file);
+int filesize (int fd);
+int read (int fd, void *buffer, unsigned size);
+int write (int fd, const void *buffer, unsigned size);
+void seek (int fd, unsigned position);
+unsigned tell (int fd);
+void close (int fd);
 
-void get_argument (int *esp, int *arg, int count);
-bool validate_addr (void * addr);
+void close_all(struct list * fd_list);
+struct child_element* get_child(tid_t tid,struct list *mylist);
 
-void sys_halt (void);
-void sys_exit (int status);
-pid_t sys_exec (const char *cmd_line);
-int sys_wait (pid_t pid);
-bool sys_create (const char *file, unsigned initial_size);
-bool sys_remove (const char *file);
-int sys_open (const char *file);
-int sys_filesize (int fd);
-int sys_read (int fd, void *buffer, unsigned size);
-int sys_write (int fd, const void *buffer, unsigned size);
-void sys_seek (int fd, unsigned position);
-unsigned sys_tell (int fd);
-void sys_close (int fd);
 
 #endif /* userprog/syscall.h */
